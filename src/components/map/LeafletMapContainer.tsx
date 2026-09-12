@@ -19,51 +19,71 @@ export function LeafletMapContainer() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
   const layerGroupRef = useRef<any>(null);
+  const leafletRef = useRef<any>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // 1. Initialize Map Once on Mount
+  // 1. Initialize Map and Leaflet Instance ONCE on Mount
   useEffect(() => {
-    let map: any = null;
     let isSubscribed = true;
 
-    import('leaflet').then((L) => {
-      if (!containerRef.current || !isSubscribed) return;
+    import('leaflet')
+      .then((L) => {
+        if (!containerRef.current || !isSubscribed) return;
 
-      // Ensure container ID is clean
-      if ((containerRef.current as any)._leaflet_id) {
-        (containerRef.current as any)._leaflet_id = null;
-      }
+        leafletRef.current = L;
 
-      const centerLat = depot.coordinates.lat;
-      const centerLng = depot.coordinates.lng;
+        // Ensure container ID is clean
+        if ((containerRef.current as any)._leaflet_id) {
+          (containerRef.current as any)._leaflet_id = null;
+        }
 
-      map = L.map(containerRef.current, {
-        center: [centerLat, centerLng],
-        zoom: 11,
-        scrollWheelZoom: true,
-        zoomControl: true,
+        const centerLat = depot.coordinates.lat;
+        const centerLng = depot.coordinates.lng;
+
+        const map = L.map(containerRef.current, {
+          center: [centerLat, centerLng],
+          zoom: 11,
+          scrollWheelZoom: true,
+          zoomControl: true,
+        });
+
+        mapInstanceRef.current = map;
+
+        // Add Tile Layer with error suppression
+        const tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; OpenStreetMap contributors',
+        });
+        
+        tileLayer.on('tileerror', (e: any) => {
+          // Suppress unhandled tile load error events so Next.js overlay doesn't throw [object Event]
+          if (e && typeof e.preventDefault === 'function') {
+            e.preventDefault();
+          }
+        });
+        
+        tileLayer.addTo(map);
+
+        // Create persistent layer group for dynamic markers/polylines
+        const layerGroup = L.layerGroup().addTo(map);
+        layerGroupRef.current = layerGroup;
+
+        setIsLoaded(true);
+      })
+      .catch((err) => {
+        console.warn('Leaflet dynamic import error:', err);
       });
-
-      mapInstanceRef.current = map;
-
-      // Add Tile Layer
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; OpenStreetMap contributors',
-      }).addTo(map);
-
-      // Create a persistent layer group for dynamic overlays
-      const layerGroup = L.layerGroup().addTo(map);
-      layerGroupRef.current = layerGroup;
-
-      setIsLoaded(true);
-    });
 
     return () => {
       isSubscribed = false;
       if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
+        try {
+          mapInstanceRef.current.remove();
+        } catch {
+          // Ignore unmount teardown errors
+        }
         mapInstanceRef.current = null;
         layerGroupRef.current = null;
+        leafletRef.current = null;
       }
       if (containerRef.current) {
         (containerRef.current as any)._leaflet_id = null;
@@ -71,15 +91,16 @@ export function LeafletMapContainer() {
     };
   }, []); // Run ONCE on mount
 
-  // 2. Update Layers (Depot, Communities, Routes, Vehicles) dynamically without destroying map
+  // 2. Synchronously Update Map Layers on State Changes using stored Leaflet reference
   useEffect(() => {
     const map = mapInstanceRef.current;
     const layerGroup = layerGroupRef.current;
+    const L = leafletRef.current;
 
-    if (!map || !layerGroup || !isLoaded) return;
+    if (!map || !layerGroup || !L || !isLoaded) return;
 
-    import('leaflet').then((L) => {
-      // Safely clear previous layer objects without throwing _leaflet_pos errors
+    try {
+      // Clear previous layers synchronously
       layerGroup.clearLayers();
 
       // Central Depot Marker
@@ -221,7 +242,9 @@ export function LeafletMapContainer() {
           </div>`
         );
       });
-    });
+    } catch (err) {
+      console.warn('Map update layer error:', err);
+    }
   }, [
     isLoaded,
     depot,
