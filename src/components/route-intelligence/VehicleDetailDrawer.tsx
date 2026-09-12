@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 
 export const VehicleDetailDrawer: React.FC = () => {
+  const [mounted, setMounted] = React.useState(false);
   const {
     vehicles,
     selectedVehicleId,
@@ -24,7 +25,11 @@ export const VehicleDetailDrawer: React.FC = () => {
     simulateRoadBlock,
   } = useLogisticsStore();
 
-  if (!selectedVehicleId) return null;
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted || !selectedVehicleId) return null;
 
   const vehicle = vehicles.find((v) => v.id === selectedVehicleId);
   const intel = routeIntelligenceMap[selectedVehicleId];

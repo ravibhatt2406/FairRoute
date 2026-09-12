@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 
 export const RouteComparisonPanel: React.FC = () => {
+  const [mounted, setMounted] = React.useState(false);
   const {
     vehicles,
     selectedVehicleId,
@@ -28,10 +29,14 @@ export const RouteComparisonPanel: React.FC = () => {
     activeRoadBlockAlert,
   } = useLogisticsStore();
 
+  React.useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const activeVehId = selectedVehicleId || (vehicles[0] ? vehicles[0].id : 'veh-01');
   const intel = routeIntelligenceMap[activeVehId] || Object.values(routeIntelligenceMap)[0];
 
-  if (!intel) return null;
+  if (!mounted || !intel) return null;
 
   const isRerouting = intel.status === 'REROUTING';
 
@@ -189,7 +194,7 @@ export const RouteComparisonPanel: React.FC = () => {
                   <span>
                     Cost Score:{' '}
                     <strong className={isBlk ? 'text-red-600 font-mono text-sm' : 'text-slate-900 font-mono'}>
-                      {isBlk ? '∞ (Infinite)' : route.totalCost}
+                      {isBlk ? '∞ (Infinite)' : typeof route.totalCost === 'number' ? Math.round(route.totalCost) : route.totalCost}
                     </strong>
                   </span>
                   <span className="text-slate-500 text-[10px]">
