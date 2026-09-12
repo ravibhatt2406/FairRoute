@@ -9,11 +9,11 @@ import {
   Navigation,
   ShieldAlert,
   RefreshCw,
-  Sparkles,
   Layers,
   AlertTriangle,
   CheckCircle2,
-  Activity,
+  Globe,
+  Map as MapIcon,
 } from 'lucide-react';
 
 export function LeafletMapContainer() {
@@ -35,15 +35,56 @@ export function LeafletMapContainer() {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
+  const tileLayerRef = useRef<any>(null);
   const layerGroupRef = useRef<any>(null);
   const leafletRef = useRef<any>(null);
+
   const [isLoaded, setIsLoaded] = useState(false);
   const [rerouteStatus, setRerouteStatus] = useState<string | null>(null);
+  const [mapStyle, setMapStyle] = useState<'street' | 'satellite' | 'terrain'>('street');
 
   const activeVehId = selectedVehicleId || (vehicles[0] ? vehicles[0].id : 'veh-01');
   const activeIntel = routeIntelligenceMap[activeVehId] || Object.values(routeIntelligenceMap)[0];
 
-  // Handle Simulate Road Block button click inside Map Overlay
+  // Tile Layer URLs for map style selector
+  const tileUrls = {
+    street: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    terrain: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+  };
+
+  const tileAttributions = {
+    street: '&copy; OpenStreetMap contributors',
+    satellite: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+    terrain: 'Map data: &copy; OpenStreetMap contributors, SRTM | Map style: &copy; OpenTopoMap (CC-BY-SA)',
+  };
+
+  // Switch Map Tile Style dynamically
+  const switchMapStyle = (newStyle: 'street' | 'satellite' | 'terrain') => {
+    setMapStyle(newStyle);
+    const map = mapInstanceRef.current;
+    const L = leafletRef.current;
+
+    if (!map || !L) return;
+
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current);
+    }
+
+    const newTileLayer = L.tileLayer(tileUrls[newStyle], {
+      attribution: tileAttributions[newStyle],
+      maxZoom: 18,
+    });
+
+    newTileLayer.on('tileerror', (e: any) => {
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    });
+
+    newTileLayer.addTo(map);
+    tileLayerRef.current = newTileLayer;
+  };
+
+  // Handle Simulate Road Block button click
   const handleSimulateBlockClick = () => {
     setRerouteStatus('🚧 ROAD BLOCK DETECTED');
     setTimeout(() => {
@@ -63,7 +104,7 @@ export function LeafletMapContainer() {
     setTimeout(() => setRerouteStatus(null), 2500);
   };
 
-  // 1. Initialize Map and Leaflet Instance ONCE on Mount
+  // 1. Initialize Map and Leaflet Instance ONCE on Mount & Fit Local Delivery Bounding Box
   useEffect(() => {
     let isSubscribed = true;
 
@@ -77,32 +118,33 @@ export function LeafletMapContainer() {
           (containerRef.current as any)._leaflet_id = null;
         }
 
-        const centerLat = depot.coordinates.lat;
-        const centerLng = depot.coordinates.lng;
+        // Calculate bounding box of local graph nodes
+        const allCoords = graphNodes.map((n) => [n.lat, n.lng]);
+        const bounds = L.latLngBounds(allCoords as any);
 
         const map = L.map(containerRef.current, {
-          center: [centerLat, centerLng],
-          zoom: 11,
           scrollWheelZoom: true,
           zoomControl: true,
         });
 
+        // Fit map bounds to exact local delivery area with 15% padding
+        map.fitBounds(bounds, { padding: [40, 40] });
+
         mapInstanceRef.current = map;
 
-        // Add Base OpenStreetMap Tile Layer
-        const tileLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          attribution: '&copy; OpenStreetMap contributors',
+        // Base Tile Layer
+        const initialTileLayer = L.tileLayer(tileUrls.street, {
+          attribution: tileAttributions.street,
         });
 
-        tileLayer.on('tileerror', (e: any) => {
-          if (e && typeof e.preventDefault === 'function') {
-            e.preventDefault();
-          }
+        initialTileLayer.on('tileerror', (e: any) => {
+          if (e && typeof e.preventDefault === 'function') e.preventDefault();
         });
 
-        tileLayer.addTo(map);
+        initialTileLayer.addTo(map);
+        tileLayerRef.current = initialTileLayer;
 
-        // Layer group for dynamic overlays
+        // Dynamic layer group
         const layerGroup = L.layerGroup().addTo(map);
         layerGroupRef.current = layerGroup;
 
@@ -123,6 +165,7 @@ export function LeafletMapContainer() {
         mapInstanceRef.current = null;
         layerGroupRef.current = null;
         leafletRef.current = null;
+        tileLayerRef.current = null;
       }
       if (containerRef.current) {
         (containerRef.current as any)._leaflet_id = null;
@@ -130,7 +173,7 @@ export function LeafletMapContainer() {
     };
   }, []);
 
-  // 2. Update Map Layers (Road Network Graph, Candidates, Vehicle Markers, Barriers)
+  // 2. Synchronously Update Road Network Layers, Candidate Routes, Barriers & Vehicles
   useEffect(() => {
     const map = mapInstanceRef.current;
     const layerGroup = layerGroupRef.current;
@@ -144,7 +187,7 @@ export function LeafletMapContainer() {
       const nodeMap = new Map<string, { lat: number; lng: number }>();
       graphNodes.forEach((n) => nodeMap.set(n.id, { lat: n.lat, lng: n.lng }));
 
-      // A. DRAW UNDERLYING ROAD NETWORK GRAPH SEGMENTS (Available vs Blocked)
+      // A. DRAW VISIBLE ROAD NETWORK GRAPH SEGMENTS (⚪ Available vs 🔴 Blocked)
       graphEdges.forEach((edge) => {
         const from = nodeMap.get(edge.fromNode);
         const to = nodeMap.get(edge.toNode);
@@ -156,7 +199,7 @@ export function LeafletMapContainer() {
           ];
 
           if (edge.blocked) {
-            // 🔴 BLOCKED ROAD SEGMENT: Red line with 🚧 barrier marker
+            // 🔴 BLOCKED ROAD SEGMENT: Red dashed line + 🚧 barrier icon
             L.polyline(positions, {
               color: '#ef4444',
               weight: 5,
@@ -177,17 +220,17 @@ export function LeafletMapContainer() {
               .addTo(layerGroup)
               .bindPopup(`<b style="color:#ef4444; font-size:11px;">BLOCKED ROAD SEGMENT [${edge.id}]</b>`);
           } else {
-            // ⚪ AVAILABLE ROAD SEGMENT: Subtle neutral road line
+            // ⚪ AVAILABLE ROAD SEGMENT: Neutral visible road
             L.polyline(positions, {
-              color: '#94a3b8',
-              weight: 3,
-              opacity: 0.45,
+              color: mapStyle === 'satellite' ? '#64748b' : '#94a3b8',
+              weight: 3.5,
+              opacity: 0.5,
             }).addTo(layerGroup);
           }
         }
       });
 
-      // B. DRAW CENTRAL DEPOT MARKER
+      // B. CENTRAL RELIEF DEPOT MARKER
       const depotIcon = L.divIcon({
         className: 'custom-depot-icon',
         html: `<div style="background: linear-gradient(135deg, #0284c7, #06b6d4); width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; border: 2px solid white; box-shadow: 0 4px 15px rgba(2,132,199,0.5);">
@@ -201,12 +244,12 @@ export function LeafletMapContainer() {
         .addTo(layerGroup)
         .bindPopup(
           `<div style="padding:4px; font-family:sans-serif;">
-            <div style="font-weight:bold; font-size:12px; color:#0f172a;">${depot.name}</div>
+            <div style="font-weight:bold; font-size:12px; color:#0f172a;">🏭 ${depot.name}</div>
             <div style="font-size:11px; color:#475569;">Central Relief Depot</div>
           </div>`
         );
 
-      // C. DRAW COMMUNITY MARKERS
+      // C. COMMUNITY SHELTER MARKERS
       communities.forEach((comm) => {
         const isCritical = comm.priorityTier === 'CRITICAL';
         const bg = isCritical ? '#ef4444' : comm.urgencyScore >= 7 ? '#f59e0b' : '#10b981';
@@ -224,20 +267,20 @@ export function LeafletMapContainer() {
         marker.on('click', () => selectCommunity(comm.id));
         marker.bindPopup(
           `<div style="padding:4px; font-family:sans-serif; min-width:170px;">
-            <div style="font-weight:bold; font-size:12px; color:#0f172a;">${comm.name}</div>
+            <div style="font-weight:bold; font-size:12px; color:#0f172a;">📍 ${comm.name}</div>
             <div style="font-size:11px; color:#475569; margin-top:2px;">Urgency Score: <b>${comm.urgencyScore}/10</b></div>
           </div>`
         );
       });
 
-      // D. DRAW CANDIDATE PATHS FOR SELECTED VEHICLE (🟢 Optimized, 🟡 Alternative, 🔴 Blocked)
+      // D. CANDIDATE PATHS (🟢 Optimized, 🟡 Alternative, 🔴 Blocked)
       if (activeIntel && activeIntel.candidateRoutes) {
         activeIntel.candidateRoutes.forEach((cRoute) => {
           const positions: [number, number][] = cRoute.coordinates.map((c) => [c.lat, c.lng]);
           if (positions.length < 2) return;
 
           if (cRoute.isSelected) {
-            // 🟢 OPTIMIZED ROUTE: Thick highlighted green line with direction visual
+            // 🟢 OPTIMIZED ROUTE: Thick green highlighted line
             L.polyline(positions, {
               color: '#10b981',
               weight: 7,
@@ -263,7 +306,7 @@ export function LeafletMapContainer() {
         });
       }
 
-      // E. DRAW VEHICLE MARKERS ON THEIR ASSIGNED ROAD PATH
+      // E. VEHICLE MARKERS POSITIONED DIRECTLY ON ROAD PATH
       vehicles.forEach((v) => {
         const intelForVeh = routeIntelligenceMap[v.id];
         const lat = intelForVeh?.currentCoordinates?.lat || v.currentLocation.lat;
@@ -284,7 +327,7 @@ export function LeafletMapContainer() {
         vMarker.bindPopup(
           `<div style="padding:4px; font-family:sans-serif;">
             <div style="font-weight:bold; font-size:12px; color:#0f172a;">🚚 ${v.name}</div>
-            <div style="font-size:11px; color:#0284c7; font-weight:bold; margin-top:2px;">Location: ${intelForVeh?.currentNodeId || 'Depot'}</div>
+            <div style="font-size:11px; color:#0284c7; font-weight:bold; margin-top:2px;">Node: ${intelForVeh?.currentNodeId || 'Depot'}</div>
             <div style="font-size:10px; color:#10b981; font-weight:bold;">Status: ${intelForVeh?.status || v.status}</div>
           </div>`
         );
@@ -305,6 +348,7 @@ export function LeafletMapContainer() {
     graphEdges,
     activeVehId,
     selectedVehicleId,
+    mapStyle,
   ]);
 
   const selectedRoute = activeIntel?.selectedRoute;
@@ -316,13 +360,47 @@ export function LeafletMapContainer() {
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-100/90 rounded-2xl">
           <div className="text-sm font-semibold text-slate-600 flex items-center gap-2">
             <div className="w-4 h-4 rounded-full border-2 border-cyan-600 border-t-transparent animate-spin"></div>
-            Loading GIS Road Network Map...
+            Loading GIS Local Road Network Map...
           </div>
         </div>
       )}
 
       {/* Map Element */}
       <div ref={containerRef} className="w-full h-full min-h-[560px] z-0" />
+
+      {/* MAP STYLE SELECTOR OVERLAY (Top-Right inside Map) */}
+      <div className="absolute top-4 right-4 z-[500] bg-white/95 backdrop-blur-md border border-slate-200 rounded-xl p-1.5 shadow-lg flex items-center gap-1 text-xs pointer-events-auto">
+        <button
+          onClick={() => switchMapStyle('street')}
+          className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all ${
+            mapStyle === 'street'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          Street
+        </button>
+        <button
+          onClick={() => switchMapStyle('satellite')}
+          className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all ${
+            mapStyle === 'satellite'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          Satellite
+        </button>
+        <button
+          onClick={() => switchMapStyle('terrain')}
+          className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition-all ${
+            mapStyle === 'terrain'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          Terrain
+        </button>
+      </div>
 
       {/* REROUTE / ROAD BLOCK STATUS ANIMATION BANNER */}
       {rerouteStatus && (
@@ -333,13 +411,13 @@ export function LeafletMapContainer() {
       )}
 
       {/* COMPACT MAP OVERLAY PANEL (Top-Left inside Map) */}
-      <div className="absolute top-4 left-4 z-[500] bg-white/95 backdrop-blur-md border border-slate-200 rounded-2xl p-4 shadow-xl space-y-3 max-w-[290px] text-xs pointer-events-auto">
+      <div className="absolute top-4 left-4 z-[500] bg-white/95 backdrop-blur-md border border-slate-200 rounded-2xl p-3.5 shadow-xl space-y-2.5 max-w-[280px] text-xs pointer-events-auto">
         <div className="flex items-center justify-between border-b border-slate-100 pb-2">
           <div className="flex items-center space-x-2">
             <Truck className="w-4 h-4 text-cyan-600" />
             <span className="font-extrabold text-slate-900">{activeIntel?.vehicleName || 'Vehicle V-01'}</span>
           </div>
-          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full uppercase tracking-wider">
+          <span className="text-[9px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full uppercase tracking-wider">
             LIVE / SIMULATED
           </span>
         </div>
@@ -347,22 +425,24 @@ export function LeafletMapContainer() {
         {/* Telemetry Quick Status */}
         <div className="space-y-1 text-[11px] text-slate-600">
           <div className="flex justify-between">
-            <span className="text-slate-400 font-medium">Current Location:</span>
-            <span className="font-bold text-slate-800">{activeIntel?.currentNodeId || 'Junction'}</span>
+            <span className="text-slate-400 font-medium">Location:</span>
+            <span className="font-bold text-slate-800">{activeIntel?.currentNodeId || 'Depot'}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-slate-400 font-medium">Destination:</span>
             <span className="font-bold text-slate-800">{activeIntel?.destinationName || 'Community'}</span>
           </div>
           <div className="flex justify-between">
-            <span className="text-slate-400 font-medium">Active Path:</span>
-            <span className="font-bold text-emerald-600">🟢 {selectedRoute?.id || 'R1'} Optimized</span>
+            <span className="text-slate-400 font-medium">Selected Path:</span>
+            <span className="font-bold text-emerald-600">
+              🟢 {selectedRoute?.id || 'R1'} ({selectedRoute?.distanceKm || 6.2} km, {selectedRoute?.travelTimeMins || 9} min)
+            </span>
           </div>
         </div>
 
         {/* Candidate Routes List */}
-        <div className="space-y-1.5 pt-1 border-t border-slate-100">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Candidate Paths</span>
+        <div className="space-y-1 pt-1 border-t border-slate-100">
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Route Options</span>
 
           {activeIntel?.candidateRoutes?.map((r) => (
             <div
@@ -380,7 +460,7 @@ export function LeafletMapContainer() {
                 <span>{r.id} ({r.distanceKm} km)</span>
               </div>
               <span className="text-[10px] font-extrabold">
-                {r.isSelected ? 'SELECTED' : r.isBlocked ? 'BLOCKED 🚧' : 'ALT'}
+                {r.isSelected ? 'OPTIMIZED' : r.isBlocked ? 'BLOCKED 🚧' : 'ALT'}
               </span>
             </div>
           ))}
@@ -398,7 +478,7 @@ export function LeafletMapContainer() {
           <button
             onClick={handleResetClick}
             className="p-1.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-700 rounded-lg transition-all active:scale-95"
-            title="Reset Road Network"
+            title="Reset Network"
           >
             <RefreshCw className="w-3.5 h-3.5 text-slate-600" />
           </button>
@@ -425,7 +505,7 @@ export function LeafletMapContainer() {
             <span>🔴 Blocked road (🚧)</span>
           </div>
           <div className="flex items-center gap-2">
-            <span className="w-3 h-1 rounded bg-slate-300"></span>
+            <span className="w-3 h-1 rounded bg-slate-400"></span>
             <span>⚪ Available road network</span>
           </div>
           <div className="flex items-center gap-2">

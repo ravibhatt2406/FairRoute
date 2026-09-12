@@ -1,16 +1,16 @@
 import { RoadGraphNode, RoadGraphEdge, Coordinates } from '@/types/logistics';
 import { INITIAL_DEPOT, INITIAL_COMMUNITIES } from '@/lib/seed/logisticsData';
 
-// Additional intermediate junction nodes connecting communities and depot
+// Intermediate junction nodes placed strictly within the local delivery zone around Depot (34.0522, -118.2437)
 const junctionNodes: RoadGraphNode[] = [
-  { id: 'jct-01', name: 'North Junction Alpha', lat: 28.6320, lng: 77.2180, type: 'JUNCTION' },
-  { id: 'jct-02', name: 'East Junction Beta', lat: 28.6210, lng: 77.2450, type: 'JUNCTION' },
-  { id: 'jct-03', name: 'South Junction Gamma', lat: 28.5850, lng: 77.2280, type: 'JUNCTION' },
-  { id: 'jct-04', name: 'West Junction Delta', lat: 28.6080, lng: 77.1850, type: 'JUNCTION' },
-  { id: 'jct-05', name: 'Central Bypass Hub', lat: 28.6180, lng: 77.2100, type: 'JUNCTION' },
-  { id: 'jct-06', name: 'River Bridge Link', lat: 28.6400, lng: 77.2350, type: 'JUNCTION' },
-  { id: 'jct-07', name: 'Valley Outer Ring', lat: 28.5900, lng: 77.2600, type: 'JUNCTION' },
-  { id: 'jct-08', name: 'Highland Pass', lat: 28.6500, lng: 77.1950, type: 'JUNCTION' },
+  { id: 'jct-01', name: 'North Junction Alpha', lat: 34.0700, lng: -118.2400, type: 'JUNCTION' },
+  { id: 'jct-02', name: 'East Junction Beta', lat: 34.0500, lng: -118.2100, type: 'JUNCTION' },
+  { id: 'jct-03', name: 'South Junction Gamma', lat: 34.0200, lng: -118.2500, type: 'JUNCTION' },
+  { id: 'jct-04', name: 'West Junction Delta', lat: 34.0500, lng: -118.2800, type: 'JUNCTION' },
+  { id: 'jct-05', name: 'Central Bypass Hub', lat: 34.0550, lng: -118.2450, type: 'JUNCTION' },
+  { id: 'jct-06', name: 'River Bridge Link', lat: 34.0850, lng: -118.2650, type: 'JUNCTION' },
+  { id: 'jct-07', name: 'Valley Outer Ring', lat: 34.0150, lng: -118.2250, type: 'JUNCTION' },
+  { id: 'jct-08', name: 'Highland Pass', lat: 34.0950, lng: -118.2250, type: 'JUNCTION' },
 ];
 
 export function buildInitialGraphNodes(): RoadGraphNode[] {
@@ -120,7 +120,7 @@ export function buildInitialGraphEdges(nodes: RoadGraphNode[]): RoadGraphEdge[] 
     { id: 'edge-jct3-com10', fromNode: 'jct-03', toNode: 'com-10', roadType: 'SECONDARY', risk: 3 },
     { id: 'edge-jct7-com10', fromNode: 'jct-07', toNode: 'com-10', roadType: 'DIRT', risk: 5 },
 
-    // Cross connections between adjacent communities for multi-path routing
+    // Cross links
     { id: 'edge-com1-com2', fromNode: 'com-01', toNode: 'com-02', roadType: 'PRIMARY', risk: 2 },
     { id: 'edge-com2-com5', fromNode: 'com-02', toNode: 'com-05', roadType: 'HIGHWAY', risk: 1 },
     { id: 'edge-com3-com6', fromNode: 'com-03', toNode: 'com-06', roadType: 'SECONDARY', risk: 4 },
@@ -136,12 +136,10 @@ export function buildInitialGraphEdges(nodes: RoadGraphNode[]): RoadGraphEdge[] 
 
     if (from && to) {
       const dist = calculateHaversineDistance(from, to);
-      // Speed estimates by road type (km/h): HIGHWAY=60, PRIMARY=45, SECONDARY=30, DIRT=20
-      const speedMap = { HIGHWAY: 60, PRIMARY: 45, SECONDARY: 30, DIRT: 20 };
-      const speed = speedMap[def.roadType] || 40;
-      const travelTime = Math.round(((dist / speed) * 60 + Math.random() * 2) * 10) / 10;
+      const speedMap = { HIGHWAY: 50, PRIMARY: 40, SECONDARY: 30, DIRT: 20 };
+      const speed = speedMap[def.roadType] || 35;
+      const travelTime = Math.round(((dist / speed) * 60) * 10) / 10;
 
-      // Add forward edge
       edges.push({
         id: def.id,
         fromNode: def.fromNode,
@@ -153,7 +151,6 @@ export function buildInitialGraphEdges(nodes: RoadGraphNode[]): RoadGraphEdge[] 
         roadType: def.roadType,
       });
 
-      // Add reverse edge for undirected graph representation
       edges.push({
         id: `${def.id}-rev`,
         fromNode: def.toNode,
