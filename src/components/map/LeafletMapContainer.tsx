@@ -2,7 +2,6 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { useLogisticsStore } from '@/lib/store/useLogisticsStore';
-import { Community } from '@/types/logistics';
 
 export function LeafletMapContainer() {
   const {
@@ -19,22 +18,22 @@ export function LeafletMapContainer() {
 
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
-
+  const layerGroupRef = useRef<any>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
+  // 1. Initialize Map Once on Mount
   useEffect(() => {
     let map: any = null;
+    let isSubscribed = true;
 
-    // Dynamically import Leaflet strictly on client side
     import('leaflet').then((L) => {
-      if (!containerRef.current) return;
+      if (!containerRef.current || !isSubscribed) return;
 
-      // Clean up pre-existing Leaflet container ID if present to prevent "Map container is already initialized" error
+      // Ensure container ID is clean
       if ((containerRef.current as any)._leaflet_id) {
         (containerRef.current as any)._leaflet_id = null;
       }
 
-      // Initialize map
       const centerLat = depot.coordinates.lat;
       const centerLng = depot.coordinates.lng;
 
@@ -47,12 +46,43 @@ export function LeafletMapContainer() {
 
       mapInstanceRef.current = map;
 
-      // Add OpenStreetMap tile layer
+      // Add Tile Layer
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; OpenStreetMap contributors',
       }).addTo(map);
 
-      // Custom Depot Icon
+      // Create a persistent layer group for dynamic overlays
+      const layerGroup = L.layerGroup().addTo(map);
+      layerGroupRef.current = layerGroup;
+
+      setIsLoaded(true);
+    });
+
+    return () => {
+      isSubscribed = false;
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+        layerGroupRef.current = null;
+      }
+      if (containerRef.current) {
+        (containerRef.current as any)._leaflet_id = null;
+      }
+    };
+  }, []); // Run ONCE on mount
+
+  // 2. Update Layers (Depot, Communities, Routes, Vehicles) dynamically without destroying map
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    const layerGroup = layerGroupRef.current;
+
+    if (!map || !layerGroup || !isLoaded) return;
+
+    import('leaflet').then((L) => {
+      // Safely clear previous layer objects without throwing _leaflet_pos errors
+      layerGroup.clearLayers();
+
+      // Central Depot Marker
       const depotIcon = L.divIcon({
         className: 'custom-depot-icon',
         html: `<div style="background: linear-gradient(135deg, #0284c7, #06b6d4); width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; border: 2px solid white; box-shadow: 0 4px 15px rgba(2,132,199,0.5);">
@@ -62,9 +92,8 @@ export function LeafletMapContainer() {
         iconAnchor: [18, 18],
       });
 
-      // Central Depot Marker
-      L.marker([centerLat, centerLng], { icon: depotIcon })
-        .addTo(map)
+      L.marker([depot.coordinates.lat, depot.coordinates.lng], { icon: depotIcon })
+        .addTo(layerGroup)
         .bindPopup(
           `<div style="padding:4px; font-family:sans-serif;">
             <div style="font-weight:bold; font-size:12px; color:#0f172a;">${depot.name}</div>
@@ -73,7 +102,7 @@ export function LeafletMapContainer() {
           </div>`
         );
 
-      // 10 Community Markers
+      // Community Markers
       communities.forEach((comm) => {
         const isCritical = comm.priorityTier === 'CRITICAL';
         const bg = isCritical ? '#ef4444' : comm.urgencyScore >= 7 ? '#f59e0b' : '#10b981';
@@ -87,10 +116,8 @@ export function LeafletMapContainer() {
           iconAnchor: [14, 14],
         });
 
-        const marker = L.marker([comm.coordinates.lat, comm.coordinates.lng], { icon: commIcon }).addTo(map);
-
+        const marker = L.marker([comm.coordinates.lat, comm.coordinates.lng], { icon: commIcon }).addTo(layerGroup);
         marker.on('click', () => selectCommunity(comm.id));
-
         marker.bindPopup(
           `<div style="padding:4px; font-family:sans-serif; min-width:180px;">
             <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -106,10 +133,9 @@ export function LeafletMapContainer() {
         );
       });
 
-      // Live Route Intelligence Polylines
-      const storeState = useLogisticsStore.getState();
-      const currentSelectedVehId = storeState.selectedVehicleId || 'veh-01';
-      const activeIntel = storeState.routeIntelligenceMap[currentSelectedVehId];
+      // Live Candidate Routes Polylines & Road Block Barriers
+      const currentSelectedVehId = selectedVehicleId || 'veh-01';
+      const activeIntel = routeIntelligenceMap[currentSelectedVehId];
 
       if (activeIntel && activeIntel.candidateRoutes) {
         activeIntel.candidateRoutes.forEach((cRoute) => {
@@ -122,7 +148,7 @@ export function LeafletMapContainer() {
               color: '#10b981',
               weight: 6,
               opacity: 0.95,
-            }).addTo(map);
+            }).addTo(layerGroup);
           } else if (cRoute.isBlocked) {
             // 🔴 BLOCKED ROUTE: Red dashed line
             L.polyline(positions, {
@@ -130,7 +156,7 @@ export function LeafletMapContainer() {
               weight: 4,
               opacity: 0.85,
               dashArray: '6, 6',
-            }).addTo(map);
+            }).addTo(layerGroup);
 
             // Add 🚧 Barrier icon on blocked route segment
             if (positions.length >= 2) {
@@ -142,8 +168,8 @@ export function LeafletMapContainer() {
                 iconSize: [26, 26],
                 iconAnchor: [13, 13],
               });
-              L.marker(barrierPos as any, { icon: barrierIcon })
-                .addTo(map)
+              L.marker(barrierPos, { icon: barrierIcon })
+                .addTo(layerGroup)
                 .bindPopup('<b style="color:#ef4444; font-size:11px;">ROAD BLOCK DETECTED — INFEASIBLE SEGMENT</b>');
             }
           } else {
@@ -153,7 +179,7 @@ export function LeafletMapContainer() {
               weight: 4,
               opacity: 0.8,
               dashArray: '8, 8',
-            }).addTo(map);
+            }).addTo(layerGroup);
           }
         });
       } else if (activePlan) {
@@ -164,13 +190,13 @@ export function LeafletMapContainer() {
             weight: 4,
             opacity: 0.8,
             dashArray: '8, 8',
-          }).addTo(map);
+          }).addTo(layerGroup);
         });
       }
 
-      // Vehicle Markers with Live Coordinates
+      // Vehicle Markers with Live Interpolated Positions
       vehicles.forEach((v) => {
-        const intelForVeh = storeState.routeIntelligenceMap[v.id];
+        const intelForVeh = routeIntelligenceMap[v.id];
         const lat = intelForVeh?.currentCoordinates?.lat || v.currentLocation.lat;
         const lng = intelForVeh?.currentCoordinates?.lng || v.currentLocation.lng;
         const isSelVeh = v.id === currentSelectedVehId;
@@ -184,7 +210,7 @@ export function LeafletMapContainer() {
           iconAnchor: [17, 17],
         });
 
-        const vMarker = L.marker([lat, lng], { icon: vehicleIcon }).addTo(map);
+        const vMarker = L.marker([lat, lng], { icon: vehicleIcon }).addTo(layerGroup);
         vMarker.on('click', () => selectVehicle(v.id));
 
         vMarker.bindPopup(
@@ -195,19 +221,19 @@ export function LeafletMapContainer() {
           </div>`
         );
       });
-
-      setIsLoaded(true);
     });
-
-    return () => {
-      if (map) {
-        map.remove();
-      }
-      if (containerRef.current) {
-        (containerRef.current as any)._leaflet_id = null;
-      }
-    };
-  }, [depot, communities, vehicles, activePlan, selectCommunity, selectVehicle, routeIntelligenceMap, graphEdges, selectedVehicleId]);
+  }, [
+    isLoaded,
+    depot,
+    communities,
+    vehicles,
+    activePlan,
+    selectCommunity,
+    selectVehicle,
+    routeIntelligenceMap,
+    graphEdges,
+    selectedVehicleId,
+  ]);
 
   return (
     <div className="w-full h-full min-h-[520px] relative">
