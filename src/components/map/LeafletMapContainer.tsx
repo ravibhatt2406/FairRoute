@@ -5,8 +5,17 @@ import { useLogisticsStore } from '@/lib/store/useLogisticsStore';
 import { Community } from '@/types/logistics';
 
 export function LeafletMapContainer() {
-  const { depot, communities, vehicles, activePlan, selectCommunity, selectVehicle } =
-    useLogisticsStore();
+  const {
+    depot,
+    communities,
+    vehicles,
+    activePlan,
+    selectCommunity,
+    selectVehicle,
+    routeIntelligenceMap,
+    graphEdges,
+    selectedVehicleId,
+  } = useLogisticsStore();
 
   const containerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -97,10 +106,59 @@ export function LeafletMapContainer() {
         );
       });
 
-      // Active Route Polylines
-      if (activePlan) {
+      // Live Route Intelligence Polylines
+      const storeState = useLogisticsStore.getState();
+      const currentSelectedVehId = storeState.selectedVehicleId || 'veh-01';
+      const activeIntel = storeState.routeIntelligenceMap[currentSelectedVehId];
+
+      if (activeIntel && activeIntel.candidateRoutes) {
+        activeIntel.candidateRoutes.forEach((cRoute) => {
+          const positions: [number, number][] = cRoute.coordinates.map((c) => [c.lat, c.lng]);
+          if (positions.length < 2) return;
+
+          if (cRoute.isSelected) {
+            // 🟢 BEST ROUTE: Thick green highlighted line
+            L.polyline(positions, {
+              color: '#10b981',
+              weight: 6,
+              opacity: 0.95,
+            }).addTo(map);
+          } else if (cRoute.isBlocked) {
+            // 🔴 BLOCKED ROUTE: Red dashed line
+            L.polyline(positions, {
+              color: '#ef4444',
+              weight: 4,
+              opacity: 0.85,
+              dashArray: '6, 6',
+            }).addTo(map);
+
+            // Add 🚧 Barrier icon on blocked route segment
+            if (positions.length >= 2) {
+              const midIdx = Math.floor(positions.length / 2);
+              const barrierPos = positions[midIdx];
+              const barrierIcon = L.divIcon({
+                className: 'custom-barrier-icon',
+                html: `<div style="background:#ef4444; width:26px; height:26px; border-radius:6px; display:flex; align-items:center; justify-content:center; color:white; font-size:14px; border:2px solid white; box-shadow:0 4px 10px rgba(239,68,68,0.5);">🚧</div>`,
+                iconSize: [26, 26],
+                iconAnchor: [13, 13],
+              });
+              L.marker(barrierPos as any, { icon: barrierIcon })
+                .addTo(map)
+                .bindPopup('<b style="color:#ef4444; font-size:11px;">ROAD BLOCK DETECTED — INFEASIBLE SEGMENT</b>');
+            }
+          } else {
+            // 🟡 ALTERNATIVE ROUTE: Thinner amber dashed line
+            L.polyline(positions, {
+              color: '#f59e0b',
+              weight: 4,
+              opacity: 0.8,
+              dashArray: '8, 8',
+            }).addTo(map);
+          }
+        });
+      } else if (activePlan) {
         activePlan.routes.forEach((route: any) => {
-          const positions = route.waypoints.map((wp: any) => [wp.coordinates.lat, wp.coordinates.lng]);
+          const positions: [number, number][] = route.waypoints.map((wp: any) => [wp.coordinates.lat, wp.coordinates.lng]);
           L.polyline(positions, {
             color: route.color || '#06b6d4',
             weight: 4,
@@ -110,25 +168,30 @@ export function LeafletMapContainer() {
         });
       }
 
-      // Vehicle Markers
+      // Vehicle Markers with Live Coordinates
       vehicles.forEach((v) => {
+        const intelForVeh = storeState.routeIntelligenceMap[v.id];
+        const lat = intelForVeh?.currentCoordinates?.lat || v.currentLocation.lat;
+        const lng = intelForVeh?.currentCoordinates?.lng || v.currentLocation.lng;
+        const isSelVeh = v.id === currentSelectedVehId;
+
         const vehicleIcon = L.divIcon({
           className: 'custom-vehicle-icon',
-          html: `<div style="background: #0f172a; width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #38bdf8; border: 2px solid #06b6d4; box-shadow: 0 4px 14px rgba(6,182,212,0.4);">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+          html: `<div style="background: ${isSelVeh ? '#0284c7' : '#0f172a'}; width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: white; border: 2.5px solid ${isSelVeh ? '#38bdf8' : '#06b6d4'}; box-shadow: 0 4px 16px rgba(2,132,199,0.6);">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
           </div>`,
-          iconSize: [32, 32],
-          iconAnchor: [16, 16],
+          iconSize: [34, 34],
+          iconAnchor: [17, 17],
         });
 
-        const vMarker = L.marker([v.currentLocation.lat, v.currentLocation.lng], { icon: vehicleIcon }).addTo(map);
+        const vMarker = L.marker([lat, lng], { icon: vehicleIcon }).addTo(map);
         vMarker.on('click', () => selectVehicle(v.id));
 
         vMarker.bindPopup(
           `<div style="padding:4px; font-family:sans-serif;">
             <div style="font-weight:bold; font-size:12px; color:#0f172a;">${v.name}</div>
-            <div style="font-size:11px; color:#475569;">${v.type} (${v.capacityKg} kg capacity)</div>
-            <div style="font-size:10px; color:#10b981; font-weight:bold; margin-top:2px;">Status: ${v.status}</div>
+            <div style="font-size:11px; color:#475569;">${v.type} (${v.capacityKg} kg)</div>
+            <div style="font-size:10px; color:#10b981; font-weight:bold; margin-top:2px;">Status: ${intelForVeh?.status || v.status}</div>
           </div>`
         );
       });
@@ -144,7 +207,7 @@ export function LeafletMapContainer() {
         (containerRef.current as any)._leaflet_id = null;
       }
     };
-  }, [depot, communities, vehicles, activePlan, selectCommunity, selectVehicle]);
+  }, [depot, communities, vehicles, activePlan, selectCommunity, selectVehicle, routeIntelligenceMap, graphEdges, selectedVehicleId]);
 
   return (
     <div className="w-full h-full min-h-[520px] relative">

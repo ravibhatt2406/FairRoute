@@ -32,7 +32,7 @@ export interface Community {
   currentCoveragePct?: number;
 }
 
-export type VehicleStatus = 'AVAILABLE' | 'LOADING' | 'EN_ROUTE' | 'DELIVERING' | 'UNAVAILABLE' | 'IDLE' | 'IN_TRANSIT' | 'DELIVERED' | 'MAINTENANCE';
+export type VehicleStatus = 'AVAILABLE' | 'LOADING' | 'EN_ROUTE' | 'DELIVERING' | 'UNAVAILABLE' | 'IDLE' | 'IN_TRANSIT' | 'DELIVERED' | 'MAINTENANCE' | 'REROUTING' | 'BLOCKED' | 'COMPLETED';
 
 export interface Vehicle {
   id: string;
@@ -50,6 +50,67 @@ export interface Vehicle {
   etaMinutes: number;
   fuelPercent: number;
   availability?: boolean;
+  currentNodeId?: string;
+  assignedRouteId?: string;
+  remainingDistanceKm?: number;
+}
+
+export interface RoadGraphNode {
+  id: string;
+  name: string;
+  lat: number;
+  lng: number;
+  type: 'DEPOT' | 'COMMUNITY' | 'JUNCTION';
+}
+
+export interface RoadGraphEdge {
+  id: string;
+  fromNode: string;
+  toNode: string;
+  distanceKm: number;
+  travelTimeMins: number;
+  blocked: boolean;
+  risk: number; // 0 to 10
+  roadType: 'HIGHWAY' | 'PRIMARY' | 'SECONDARY' | 'DIRT';
+}
+
+export interface CandidateRoute {
+  id: string; // e.g. "R1", "R2", "R3"
+  vehicleId: string;
+  destinationId: string;
+  destinationName: string;
+  nodeIds: string[];
+  coordinates: Coordinates[];
+  distanceKm: number;
+  travelTimeMins: number;
+  blockedSegmentsCount: number;
+  riskPenalty: number;
+  totalCost: number;
+  status: 'AVAILABLE' | 'BLOCKED' | 'ALTERNATIVE';
+  isSelected: boolean;
+  isBlocked: boolean;
+  isAlternative: boolean;
+  selectionReasons: string[];
+  blockedEdgeIds: string[];
+}
+
+export interface VehicleRouteIntelligence {
+  vehicleId: string;
+  vehicleName: string;
+  destinationId: string;
+  destinationName: string;
+  currentNodeId: string;
+  currentCoordinates: Coordinates;
+  assignedRouteId: string;
+  candidateRoutes: CandidateRoute[];
+  selectedRoute: CandidateRoute;
+  loadKg: number;
+  capacityKg: number;
+  etaMinutes: number;
+  remainingDistanceKm: number;
+  speedKmh: number;
+  status: VehicleStatus;
+  progressPct: number;
 }
 
 export interface Depot {

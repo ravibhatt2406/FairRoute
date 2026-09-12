@@ -10,6 +10,10 @@ import {
   DisasterScenarioType,
   DeliveryLog,
   LiveSimulationStatus,
+  RoadGraphNode,
+  RoadGraphEdge,
+  VehicleRouteIntelligence,
+  CandidateRoute,
 } from '@/types/logistics';
 import {
   INITIAL_DEPOT,
@@ -19,6 +23,11 @@ import {
 } from '@/lib/seed/logisticsData';
 import { runFullOptimizationPipeline } from '@/lib/engine/simulationEngine';
 import { validateLogisticsData, ValidationError } from '@/lib/engine/validation';
+import { buildInitialGraphNodes, buildInitialGraphEdges } from '@/lib/engine/graph/graphService';
+import { generateCandidateRoutes } from '@/lib/engine/graph/alternativeRoutes';
+import { selectBestFeasibleRoute } from '@/lib/engine/graph/routeScoring';
+import { handleRoadBlockAndReroute } from '@/lib/engine/graph/reroutingEngine';
+import { tickVehicleMovement } from '@/lib/engine/graph/vehicleTracking';
 
 interface LogisticsState {
   depot: Depot;
@@ -38,6 +47,12 @@ interface LogisticsState {
   deliveryLogs: DeliveryLog[];
   validationErrors: ValidationError[];
 
+  // Live Route Intelligence State
+  graphNodes: RoadGraphNode[];
+  graphEdges: RoadGraphEdge[];
+  routeIntelligenceMap: Record<string, VehicleRouteIntelligence>;
+  activeRoadBlockAlert: { message: string; timestamp: string } | null;
+
   // Data Center CRUD Actions
   setDepot: (newDepot: Partial<Depot>) => void;
   updateInventory: (newInventory: Partial<Depot['inventory']>) => void;
@@ -51,6 +66,12 @@ interface LogisticsState {
   deleteVehicle: (id: string) => void;
 
   toggleRoadBlock: (roadId: string) => void;
+
+  // Live Route Intelligence Actions
+  initRouteIntelligence: () => void;
+  simulateRoadBlock: (vehicleId: string, edgeIdToBlock?: string) => void;
+  resetRoadNetwork: () => void;
+  tickLiveVehicles: () => void;
 
   setWeights: (newWeights: Partial<OptimizationWeights>) => void;
   setScenario: (scenarioType: DisasterScenarioType) => void;
@@ -115,6 +136,56 @@ export const useLogisticsStore = create<LogisticsState>((set, get) => {
     },
   ];
 
+  const initialNodes = buildInitialGraphNodes();
+  const initialEdges = buildInitialGraphEdges(initialNodes);
+
+  function createRouteIntelMap(nodes: RoadGraphNode[], edges: RoadGraphEdge[], vehicles: Vehicle[], communities: Community[]): Record<string, VehicleRouteIntelligence> {
+    const map: Record<string, VehicleRouteIntelligence> = {};
+    const commMap = new Map(communities.map((c) => [c.id, c]));
+
+    vehicles.forEach((veh, idx) => {
+      const targetCommId = veh.assignedCommunityIds[0] || communities[idx % communities.length]?.id || 'com-01';
+      const targetComm = commMap.get(targetCommId);
+      const targetName = targetComm ? targetComm.name : 'Community Alpha';
+
+      const candidates = generateCandidateRoutes(
+        veh.id,
+        'depot-01',
+        targetCommId,
+        targetName,
+        nodes,
+        edges,
+        veh.currentLoadKg,
+        veh.capacityKg
+      );
+
+      const selected = selectBestFeasibleRoute(candidates, veh) || candidates[0];
+
+      map[veh.id] = {
+        vehicleId: veh.id,
+        vehicleName: veh.name,
+        destinationId: targetCommId,
+        destinationName: targetName,
+        currentNodeId: 'depot-01',
+        currentCoordinates: veh.currentLocation,
+        assignedRouteId: selected ? selected.id : 'R1',
+        candidateRoutes: candidates,
+        selectedRoute: selected,
+        loadKg: veh.currentLoadKg,
+        capacityKg: veh.capacityKg,
+        etaMinutes: selected ? selected.travelTimeMins : 25,
+        remainingDistanceKm: selected ? selected.distanceKm : 14.5,
+        speedKmh: veh.speedKmh,
+        status: veh.status === 'AVAILABLE' ? 'EN_ROUTE' : veh.status,
+        progressPct: 0.1,
+      };
+    });
+
+    return map;
+  }
+
+  const initialRouteIntel = createRouteIntelMap(initialNodes, initialEdges, INITIAL_VEHICLES, INITIAL_COMMUNITIES);
+
   return {
     depot: INITIAL_DEPOT,
     communities: INITIAL_COMMUNITIES,
@@ -125,13 +196,124 @@ export const useLogisticsStore = create<LogisticsState>((set, get) => {
     scenarios: DISASTER_SCENARIOS,
     activeScenario: DISASTER_SCENARIOS[0],
     selectedCommunityId: null,
-    selectedVehicleId: null,
+    selectedVehicleId: 'veh-01',
     isOptimizing: false,
     isSimulating: false,
     simulationStatus: 'WAITING',
     demoAutopilotActive: false,
     deliveryLogs: initialLogs,
     validationErrors: [],
+
+    // Live Route Intelligence
+    graphNodes: initialNodes,
+    graphEdges: initialEdges,
+    routeIntelligenceMap: initialRouteIntel,
+    activeRoadBlockAlert: null,
+
+    initRouteIntelligence: () => {
+      const state = get();
+      const intel = createRouteIntelMap(state.graphNodes, state.graphEdges, state.vehicles, state.communities);
+      set({ routeIntelligenceMap: intel });
+    },
+
+    simulateRoadBlock: (vehicleId: string, edgeIdToBlock?: string) => {
+      const state = get();
+      const vehIntel = state.routeIntelligenceMap[vehicleId] || Object.values(state.routeIntelligenceMap)[0];
+      if (!vehIntel) return;
+
+      const targetVehicle = state.vehicles.find((v) => v.id === vehIntel.vehicleId) || state.vehicles[0];
+
+      // Pick edge to block from active route or graph
+      const activeEdges = state.graphEdges.filter(
+        (e) => !e.blocked && vehIntel.selectedRoute.nodeIds.includes(e.fromNode)
+      );
+      const edgeToBlock = edgeIdToBlock || (activeEdges[0] ? activeEdges[0].id : 'edge-jct1-jct5');
+
+      // Step A: Immediately show status REROUTING and emit alert
+      const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      set({
+        activeRoadBlockAlert: {
+          message: `🚧 ROAD BLOCK DETECTED on segment [${edgeToBlock}]! AI Rerouting Engine calculating optimal alternative path...`,
+          timestamp,
+        },
+        routeIntelligenceMap: {
+          ...state.routeIntelligenceMap,
+          [vehIntel.vehicleId]: {
+            ...vehIntel,
+            status: 'REROUTING',
+          },
+        },
+      });
+
+      // Step B: Recalculate graph and assign new optimal route
+      setTimeout(() => {
+        const currentState = get();
+        const { updatedEdges, rerouteResult } = handleRoadBlockAndReroute(
+          targetVehicle,
+          edgeToBlock,
+          currentState.graphNodes,
+          currentState.graphEdges,
+          vehIntel.destinationId,
+          vehIntel.destinationName
+        );
+
+        set({
+          graphEdges: updatedEdges,
+          routeIntelligenceMap: {
+            ...currentState.routeIntelligenceMap,
+            [vehIntel.vehicleId]: rerouteResult.routeIntelligence,
+          },
+          vehicles: currentState.vehicles.map((v) =>
+            v.id === vehIntel.vehicleId ? { ...v, status: 'EN_ROUTE' } : v
+          ),
+          deliveryLogs: [
+            {
+              id: `log-${Date.now()}`,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              vehicleId: vehIntel.vehicleId,
+              communityId: vehIntel.destinationId,
+              message: `AI REROUTED ${targetVehicle.name}: Switch from ${rerouteResult.previousRouteId} to ${rerouteResult.newRouteId} (${rerouteResult.newDistanceKm} km, ETA ${rerouteResult.newEtaMins}m).`,
+              type: 'ALERT',
+            },
+            ...currentState.deliveryLogs,
+          ],
+        });
+      }, 700);
+    },
+
+    resetRoadNetwork: () => {
+      const state = get();
+      const unblockedEdges = state.graphEdges.map((e) => ({ ...e, blocked: false }));
+      const resetIntel = createRouteIntelMap(state.graphNodes, unblockedEdges, state.vehicles, state.communities);
+
+      set({
+        graphEdges: unblockedEdges,
+        routeIntelligenceMap: resetIntel,
+        activeRoadBlockAlert: null,
+        deliveryLogs: [
+          {
+            id: `log-${Date.now()}`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            vehicleId: 'SYSTEM',
+            communityId: 'ALL',
+            message: 'ROAD NETWORK RESET: All road blocks cleared. Original optimal routes restored.',
+            type: 'CHECKPOINT',
+          },
+          ...state.deliveryLogs,
+        ],
+      });
+    },
+
+    tickLiveVehicles: () => {
+      const state = get();
+      const updatedMap: Record<string, VehicleRouteIntelligence> = {};
+
+      Object.entries(state.routeIntelligenceMap).forEach(([vehId, intel]) => {
+        updatedMap[vehId] = tickVehicleMovement(intel, 2);
+      });
+
+      set({ routeIntelligenceMap: updatedMap });
+    },
 
     setDepot: (newDepot) => {
       set((state) => ({ depot: { ...state.depot, ...newDepot } }));

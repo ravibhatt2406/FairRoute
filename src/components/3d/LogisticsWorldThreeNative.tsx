@@ -136,10 +136,70 @@ export default function LogisticsWorldThreeNative({
       const end = new THREE.Vector3(cx, 0.04, cz);
       const curve = new THREE.LineCurve3(start, end);
       const tubeGeo = new THREE.TubeGeometry(curve, 1, 0.03, 6, false);
-      const tubeMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.5, transparent: true, opacity: 0.6 });
+      const tubeMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.5, transparent: true, opacity: 0.4 });
       const road = new THREE.Mesh(tubeGeo, tubeMat);
       scene.add(road);
     });
+
+    // 8B. Render 3D Route Intelligence Tubes & Barriers for Selected Vehicle
+    const storeState = useLogisticsStore.getState();
+    const selVehId = storeState.selectedVehicleId || 'veh-01';
+    const activeIntel = storeState.routeIntelligenceMap[selVehId];
+
+    if (activeIntel && activeIntel.candidateRoutes) {
+      activeIntel.candidateRoutes.forEach((cRoute) => {
+        if (!cRoute.coordinates || cRoute.coordinates.length < 2) return;
+
+        // Map lat/lng to 3D plane offsets relative to depot center
+        const depotLat = storeState.depot.coordinates.lat;
+        const depotLng = storeState.depot.coordinates.lng;
+
+        const points = cRoute.coordinates.map((coord) => {
+          const x = (coord.lng - depotLng) * 120; // Scale factor for 3D grid
+          const z = (depotLat - coord.lat) * 120;
+          return new THREE.Vector3(x, 0.08, z);
+        });
+
+        if (points.length >= 2) {
+          const pathCurve = new THREE.CatmullRomCurve3(points);
+          let tubeColor = 0xf59e0b; // Yellow for Alternative
+          let tubeRadius = 0.05;
+          let opacity = 0.8;
+
+          if (cRoute.isSelected) {
+            tubeColor = 0x10b981; // Bright Green for Selected
+            tubeRadius = 0.09;
+            opacity = 0.95;
+          } else if (cRoute.isBlocked) {
+            tubeColor = 0xef4444; // Bright Red for Blocked
+            tubeRadius = 0.06;
+            opacity = 0.9;
+          }
+
+          const tubeGeo = new THREE.TubeGeometry(pathCurve, 32, tubeRadius, 8, false);
+          const tubeMat = new THREE.MeshStandardMaterial({
+            color: tubeColor,
+            emissive: tubeColor,
+            emissiveIntensity: cRoute.isSelected ? 0.6 : 0.2,
+            roughness: 0.3,
+            transparent: true,
+            opacity,
+          });
+          const tubeMesh = new THREE.Mesh(tubeGeo, tubeMat);
+          scene.add(tubeMesh);
+
+          // Add 3D Road Barrier for Blocked Route
+          if (cRoute.isBlocked && points.length >= 2) {
+            const midPoint = points[Math.floor(points.length / 2)];
+            const barrierGeo = new THREE.BoxGeometry(0.6, 0.4, 0.15);
+            const barrierMat = new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xd97706, emissiveIntensity: 0.5 });
+            const barrierMesh = new THREE.Mesh(barrierGeo, barrierMat);
+            barrierMesh.position.set(midPoint.x, 0.2, midPoint.z);
+            scene.add(barrierMesh);
+          }
+        }
+      });
+    }
 
     // 9. Animated Trucks
     const truckItems: { group: THREE.Group; vehicle: Vehicle; targetX: number; targetZ: number; color: number }[] = [];
