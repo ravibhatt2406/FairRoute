@@ -1,0 +1,42 @@
+{
+  "name": "fairroute-ai",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "prisma:push": "prisma db push"
+  },
+  "dependencies": {
+    "next": "^15.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "lucide-react": "^0.475.0",
+    "framer-motion": "^11.18.2",
+    "three": "^0.160.0",
+    "recharts": "^2.15.1",
+    "leaflet": "^1.9.4",
+    "react-leaflet": "^4.2.1",
+    "zustand": "^5.0.3",
+    "react-hook-form": "^7.54.2",
+    "zod": "^3.24.2",
+    "@hookform/resolvers": "^3.10.0",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.0.1",
+    "@prisma/client": "^5.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.160.0",
+    "@types/leaflet": "^1.9.16",
+    "typescript": "^5.7.3",
+    "tailwindcss": "^3.4.17",
+    "postcss": "^8.5.2",
+    "autoprefixer": "^10.4.20",
+    "prisma": "^5.22.0"
+  }
+}

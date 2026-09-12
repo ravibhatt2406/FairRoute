@@ -1,0 +1,74 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Depot {
+  id          String   @id @default("depot-01")
+  name        String
+  lat         Float
+  lng         Float
+  food        Int
+  water       Int
+  medicine    Int
+  blankets    Int
+  hygiene     Int
+  updatedAt   DateTime @updatedAt
+}
+
+model Community {
+  id                 String   @id
+  name               String
+  lat                Float
+  lng                Float
+  population         Int
+  foodDemand         Int
+  waterDemand        Int
+  medicineDemand     Int
+  blanketDemand      Int
+  hygieneDemand      Int
+  priority           String   @default("HIGH") // LOW, MEDIUM, HIGH, CRITICAL
+  urgency            Int      @default(8)       // 1 to 10
+  currentCoverage    Float    @default(0.0)
+  region             String   @default("General Zone")
+  updatedAt          DateTime @updatedAt
+}
+
+model Vehicle {
+  id           String   @id
+  name         String
+  type         String   // Heavy Truck, Medium Cargo, Rapid Transport, Helicopter Unit
+  capacityKg   Int
+  maxLoadKg    Int
+  lat          Float
+  lng          Float
+  speedKmh     Int      @default(60)
+  status       String   @default("AVAILABLE") // AVAILABLE, LOADING, EN_ROUTE, DELIVERING, UNAVAILABLE
+  availability Boolean  @default(true)
+  updatedAt    DateTime @updatedAt
+}
+
+model Road {
+  id             String   @id
+  sourceId       String
+  targetId       String
+  distanceKm     Float
+  isBlocked      Boolean  @default(false)
+  travelTimeMins Int
+}
+
+model OptimizationPlan {
+  id                        String   @id @default(cuid())
+  timestamp                 DateTime @default(now())
+  fairnessScore             Float
+  initialFairness           Float
+  avgFulfillmentRate        Float
+  distanceSavedKm           Float
+  fleetUtilizationPercent   Float
+  estimatedDeliveryTimeMins Int
+  planJson                  String   // Stored complete serialized plan
+}
